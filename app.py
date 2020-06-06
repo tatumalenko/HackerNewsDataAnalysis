@@ -3,24 +3,107 @@ import re
 import string
 from collections import Counter
 from math import log
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Optional, Tuple
 
 
 class Classification:
     text: str
-    line: str
+    line: List[str]
     class_type_predicted: str
     class_type_actual: str
     scores: List[float]
     accurate: bool
 
-    def __init__(self, text: str, line: str, class_type_actual: str, class_type_predicted: str, scores: List[float]):
+    def __init__(self, text: str, line: List[str], class_type_actual: str, class_type_predicted: str,
+                 scores: List[float]):
         self.text = text
         self.line = line
         self.class_type_actual = class_type_actual
         self.class_type_predicted = class_type_predicted
         self.scores = scores
         self.accurate = self.class_type_actual == self.class_type_predicted
+
+
+class Model:
+    _class_types: Set[str]
+    _beta: float
+    classifications: List[Classification]
+    accuracy: float
+    precision: float
+    recall: float
+    f_measure: float
+
+    def __init__(self, classifications: List[Classification]):
+        self._beta = 1
+        self.classifications = classifications
+        self._class_types = self._compute_class_types()
+        self.accuracy, self.precision, self.recall, self.f_measure = self._compute_metrics()
+
+    def _compute_class_types(self) -> Set[str]:
+        class_types = set()
+        for classification in self.classifications:
+            class_types.add(classification.class_type_actual)
+            class_types.add(classification.class_type_predicted)
+        return class_types
+
+    def _compute_metrics(self) -> Tuple[float, float, float, float]:
+        class_type_true_positive_sums = dict()  # A
+        class_type_false_positive_sums = dict()  # B
+        class_type_false_negative_sums = dict()  # D
+        class_type_accuracies = dict()
+        class_type_precisions = dict()
+        class_type_recalls = dict()
+        class_type_f_measures = dict()
+
+        for class_type in self._class_types:
+            class_type_true_positive_sums[class_type] = 0
+            class_type_false_positive_sums[class_type] = 0
+            class_type_false_negative_sums[class_type] = 0
+            class_type_accuracies[class_type] = 0.0
+            class_type_precisions[class_type] = 0.0
+            class_type_recalls[class_type] = 0.0
+            class_type_f_measures[class_type] = 0.0
+
+        for classification in self.classifications:
+            for class_type in self._class_types:
+                if classification.class_type_actual == class_type or classification.class_type_predicted == class_type:
+                    if classification.accurate:
+                        class_type_true_positive_sums[class_type] += 1
+                        break
+                    elif not classification.accurate and classification.class_type_predicted == class_type:
+                        class_type_false_positive_sums[class_type] += 1
+                        break
+                    elif not classification.accurate and classification.class_type_actual == class_type:
+                        class_type_false_negative_sums[class_type] += 1
+                        break
+
+        beta_squared = self._beta ** 2
+        class_type_correct_sum = 0
+        class_type_false_positive_sum = 0
+        class_type_false_negative_sum = 0
+
+        for class_type in self._class_types:
+            class_type_correct_sum += class_type_true_positive_sums[class_type]
+            class_type_false_positive_sum += class_type_false_positive_sums[class_type]
+            class_type_false_negative_sum += class_type_false_negative_sums[class_type]
+
+        # for class_type in self._class_types:
+        #     # class_type_accuracies[class_type] = 0.0
+        #     class_type_precisions[class_type] = class_type_true_positive_sums[class_type] / (
+        #             class_type_true_positive_sums[class_type] + class_type_false_positive_sums[class_type])
+        #     class_type_recalls[class_type] = class_type_true_positive_sums[class_type] / (
+        #             class_type_true_positive_sums[class_type] + class_type_false_negative_sums[class_type])
+        #     class_type_f_measures[class_type] = (beta_squared + 1) * class_type_precisions[class_type] * \
+        #                                         class_type_recalls[class_type] / (
+        #                                                 beta_squared * class_type_precisions[class_type] +
+        #                                                 class_type_recalls[class_type])
+
+        accuracy = class_type_correct_sum / len(self.classifications)
+        precision = class_type_correct_sum / (class_type_correct_sum + class_type_false_positive_sum)
+        recall = class_type_correct_sum / (class_type_correct_sum + class_type_false_negative_sum)
+        f_measure = (beta_squared + 1) * precision * recall / (beta_squared * precision + recall)
+
+        return accuracy, precision, recall, f_measure
 
 
 class DataSet:
@@ -88,8 +171,9 @@ class DataSet:
 
     def _compute_priors(self) -> Dict[str, float]:
         priors = dict(Counter([line[self._class_index] for line in self.lines]))
+        total_samples = sum(priors.values())
         for key in priors.keys():
-            priors[key] /= sum(priors.values())
+            priors[key] /= total_samples
         return priors
 
     def _sanitize_text(self, text: str) -> List[str]:
@@ -108,12 +192,16 @@ class DataSet:
             self.removed_set.add(str.join(' ', removed))
         return sanitized
 
-    def compute_classifications(self, csv_path: str):
-        lines = [row for row in csv.reader(open(csv_path), delimiter=",")]
-        headers, lines = list(filter(None, lines[0])), lines[1:]
+    def compute_classifications(self,
+                                lines: Optional[List[List[str]]] = None,
+                                csv_path: Optional[str] = None) -> List[Classification]:
+        if lines is None and csv_path is not None:
+            lines = [row for row in csv.reader(open(csv_path), delimiter=",")]
+            headers, lines = list(filter(None, lines[0])), lines[1:]
         classifications = []
         for line in lines:
             classifications.append(self._compute_classification(line))
+
         return classifications
 
     def _compute_classification(self, line: List[str]) -> Classification:
@@ -127,10 +215,10 @@ class DataSet:
                 self.word_class_type_frequency_sums[class_type] + self.vocabulary_size * 0.5)
 
     def score(self, class_type: str, sanitized: List[str]) -> float:
-        score = log(self.priors[class_type], base=10)
+        score = log(self.priors[class_type], 10)
         for word in sanitized:
             if word in self.probabilities.keys():
-                score += log(self.probabilities[word][class_type], base=10)
+                score += log(self.probabilities[word][class_type], 10)
         return score
 
     def classify(self, text: str) -> (List[float], str):
@@ -168,6 +256,13 @@ class Main:
                                 lines=[line for line in lines if line[year_index] == '2018'])
         testing_data = DataSet(text_index=self._text_index, class_index=self._class_index,
                                lines=[line for line in lines if line[year_index] == '2019'])
+
+        classifications = training_data.compute_classifications(
+            lines=[line for line in lines if line[year_index] == '2019'])
+
+        model = Model(classifications)
+
+        print('hey')
 
     def start(self):
         pass
