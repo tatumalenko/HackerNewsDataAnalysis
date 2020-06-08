@@ -3,3 +3,4 @@
 **/.DS_Store
 *.txt
 res/hn.csv
+**/__pycache__
