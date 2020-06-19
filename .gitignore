@@ -2,5 +2,10 @@
 **/.idea
 **/.DS_Store
 *.txt
-res/hn.csv
+res
+!res/hns_2018_2019.csv
+!res/test.csv
 **/__pycache__
+out
+*.ini
+!settings.ini

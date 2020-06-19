@@ -6,6 +6,7 @@ from math import log10
 from typing import Optional, List, Dict, Tuple, Set
 
 import numpy as np
+import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 from nltk import PorterStemmer
 from sklearn import metrics
@@ -22,6 +23,8 @@ class Model:
     _min_frequency: Optional[int]
     _top_percent_removed: Optional[float]
     _stemmer: PorterStemmer
+    word_weights: Dict[str, float]
+    smoothing: float
     lines: List[List[str]]
     removed_tokens: Set[str]
     removed_words: List[str]
@@ -36,6 +39,8 @@ class Model:
     def __init__(self,
                  text_index: int,
                  class_index: int,
+                 word_weights: Dict[str, float],
+                 smoothing: float,
                  lines: Optional[List[List[str]]] = None,
                  csv_path: Optional[str] = None,
                  stop_words: Optional[List[str]] = None,
@@ -47,6 +52,8 @@ class Model:
         self._min_max_size = min_max_size
         self._min_frequency = min_frequency
         self._top_percent_removed = top_percent_removed
+        self.word_weights = word_weights
+        self.smoothing = smoothing
         if lines is None and csv_path is not None:
             lines = [row for row in csv.reader(open(csv_path), quotechar='"', delimiter=',')]
             headers, lines = list(filter(None, lines[0])), lines[1:]
@@ -159,7 +166,7 @@ class Model:
             new.append(self._stemmer.stem(word))
         sanitized = new
         # TODO: This line gives better results for lower freq # but slightly worse for baseline
-        # sanitized = [w.strip("'") for w in sanitized]
+        sanitized = [w.strip(string.punctuation) for w in sanitized]
 
         # Consider 'ask hn' and 'show hn' as one word to better predict type
         joined = str.join(' ', sanitized)
@@ -199,17 +206,17 @@ class Model:
         return scores, class_type_argmax
 
     def probability(self, word: str, class_type: str) -> float:
-        return (0.5 + self.frequencies[word][class_type]) / (
-                self.word_class_type_frequency_sums[class_type] + self.vocabulary_size * 0.5)
+        return (self.smoothing + self.frequencies[word][class_type]) / (
+                self.word_class_type_frequency_sums[class_type] + self.vocabulary_size * self.smoothing)
 
     def score(self, class_type: str, sanitized: List[str]) -> float:
         score = log10(self.priors[class_type])
         for word in sanitized:
             if word in self.probabilities.keys():
-                multiplier = 10000 if (word == 'ask hn' and class_type == 'ask_hn') or (
-                        word == 'show hn' and class_type == 'show_hn') or (
-                                              word == 'poll' and class_type == 'poll') else 1
-                # multiplier = 1.0
+                multiplier = 1.0
+                class_type_word = str.join(' ', class_type.split('_')).strip()
+                if word == class_type_word:
+                    multiplier = self.word_weights[word]
                 score += log10(self.probabilities[word][class_type] * multiplier)
         return score
 
@@ -232,6 +239,8 @@ class Model:
 
     def classify(self,
                  lines: Optional[List[List[str]]] = None,
+                 beta: float = 1.0,
+                 average: str = 'weighted',
                  csv_path: Optional[str] = None,
                  text_index: Optional[int] = None,
                  class_index: Optional[int] = None) -> 'Performance':
@@ -240,11 +249,12 @@ class Model:
                                          csv_path=csv_path,
                                          text_index=text_index if text_index is not None else self._text_index,
                                          class_index=class_index if class_index is not None else self._class_index)
-        return Model.Performance(self, classifications)
+        return Model.Performance(self, classifications, beta=beta, average=average)
 
     class Performance:
         _class_types: List[str]
         beta: float
+        average: str
         model: 'Model'
         classifications: List[Classification]
         confusion_matrix: np.ndarray
@@ -256,8 +266,13 @@ class Model:
         cohen_kappa_score: float
         jaccard_score: float
 
-        def __init__(self, model: 'Model', classifications: List[Classification], beta: Optional[float] = 1.0):
+        def __init__(self,
+                     model: 'Model',
+                     classifications: List[Classification],
+                     beta: Optional[float] = 1.0,
+                     average: str = 'weighted'):
             self.beta = beta
+            self.average = average
             self.model = model
             self.classifications = classifications
             self._class_types = self._compute_class_types()
@@ -300,13 +315,16 @@ class Model:
             # Overall model metrics
             accuracy = metrics.accuracy_score(y_true=y_actual,
                                               y_pred=y_predicted)
-            precision, recall, f_measure, _ = metrics.precision_recall_fscore_support(y_actual,
-                                                                                      y_predicted,
-                                                                                      average='weighted',
-                                                                                      beta=self.beta)
+            precision, recall, _, _ = metrics.precision_recall_fscore_support(y_actual,
+                                                                              y_predicted,
+                                                                              average=self.average,
+                                                                              beta=self.beta)
+            beta2 = self.beta ** 2
+            f_meaure_denom = (beta2 * precision + recall)
+            f_measure = (1 + beta2) * (precision * recall) / f_meaure_denom if f_meaure_denom > 0.0 else 0.0
             matthews_corrcoef = metrics.matthews_corrcoef(y_true=y_actual, y_pred=y_predicted)
             cohen_kappa_score = metrics.cohen_kappa_score(y_actual, y_predicted)
-            jaccard_score = metrics.jaccard_score(y_true=y_actual, y_pred=y_predicted, average='weighted')
+            jaccard_score = metrics.jaccard_score(y_true=y_actual, y_pred=y_predicted, average=self.average)
 
             # Class type specific metrics
             precisions = dict()
@@ -333,11 +351,14 @@ class Model:
             return confusion_matrix, accuracy, precision, recall, f_measure, matthews_corrcoef, cohen_kappa_score, jaccard_score
 
         def plot(self, ax: Axes, x: int):
-            ax.scatter([x], [self.accuracy], marker='*', facecolor='red', label='accuracy')
+            ax.scatter([x], [self.accuracy], marker='*', facecolor='red', label='accuracy',
+                       s=(plt.rcParams['lines.markersize'] + 1) ** 2)
             ax.scatter([x], [self.precision], marker='x', facecolor='blue', label='precision')
-            ax.scatter([x], [self.recall], marker='2', facecolor='turquoise', label='recall')
-            ax.scatter([x], [self.f_measure], marker='P', facecolor='purple', label='f_measure')
+            ax.scatter([x], [self.recall], marker='2', facecolor='turquoise', label='recall',
+                       s=(plt.rcParams['lines.markersize'] + 2) ** 2)
+            ax.scatter([x], [self.f_measure], marker='+', facecolor='fuchsia', label='f_measure',
+                       s=(plt.rcParams['lines.markersize'] + 1) ** 2)
             ax.scatter([x], [self.matthews_corrcoef], marker='D', facecolor='pink', label='matthews_corrcoef')
             ax.scatter([x], [self.cohen_kappa_score], marker='.', facecolor='black', label='cohen_kappa')
-            ax.scatter([x], [self.jaccard_score], marker='1', facecolor='lime', label='jaccard')
-
+            ax.scatter([x], [self.jaccard_score], marker='1', facecolor='lime', label='jaccard',
+                       s=(plt.rcParams['lines.markersize'] + 2) ** 2)
