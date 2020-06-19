@@ -73,7 +73,7 @@ class MetricSettings:
                  out_path_baseline: str,
                  out_path_stopword: str,
                  out_path_wordlength: str):
-        if average not in ['weighted', 'macro', 'micro', 'weighted']:
+        if average not in ['weighted', 'macro', 'micro']:
             raise ArgumentError(None, f'Metric.average must be one of {average}')
         self.average = average
         self.beta = beta

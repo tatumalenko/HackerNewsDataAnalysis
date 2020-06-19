@@ -217,43 +217,16 @@ class App:
         print('|v|_mf: ' + str([m.model.vocabulary_size for m in e3_mf]))
         print('|v|_tp: ' + str([m.model.vocabulary_size for m in e3_tp]))
 
-    def prepare_balanced_data(self):
-        lines = self.read_lines(csv_path='./res/hn.csv')
-        stories = [line for line in lines if line[2] == 'story']
-        ask_hns = [line for line in lines if line[2] == 'ask_hn']
-        show_hns = [line for line in lines if line[2] == 'show_hn']
-        polls = [line for line in lines if line[2] == 'poll']
-        train = stories[:25] + ask_hns[:25] + show_hns[:25] + polls[:25]
-        test = stories[25:50] + ask_hns[25:50] + show_hns[25:50] + polls[25:50]
-
-        def save(data, path, is_training_data):
-            f = open(path, 'w', newline='')
-            writer = csv.writer(f, delimiter=',',
-                                quotechar='"', quoting=csv.QUOTE_MINIMAL)
-            writer.writerow(
-                ['', 'Object ID', 'Title', 'Post Type', 'Author', 'Created At', 'URL', 'Points', 'Number of Comments'])
-            ctr = 0
-            for line in data:
-                line[4] = '2018' if is_training_data else '2019'
-                writer.writerow([str(ctr)] + line)
-                ctr += 1
-            f.close()
-
-        save(train, 'res/train2018.csv', True)
-        save(test, 'res/test2019.csv', False)
-
     def start(self):
         start = time()
         self.experiment_1(data_train=self.data_train, data_test=self.data_test)
-        # self.experiment_2(data_train=self.data_train, data_test=self.data_test)
+        self.experiment_2(data_train=self.data_train, data_test=self.data_test)
         self.experiment_3(data_train=self.data_train, data_test=self.data_test)
         stop = time()
         print()
         print(f'Elapsed time: {(stop - start)} secs')
         plt.show()
-        # self.prepare_balanced_data()
 
 
 if __name__ == '__main__':
-    # App(Settings('./settings.ini')).start()
-    App(Settings('./test.ini')).start()
+    App(Settings('./settings.ini')).start()

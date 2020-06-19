@@ -154,6 +154,8 @@ class Model:
         punctuation = re.sub(r'[$]', '', string.punctuation)  # remove all punctuation except $
         sanitized = list(filter(None, [word.strip(punctuation).lower() for word in
                                        re.split(r'\s', re.sub(r'[^\w\'\s&+-.$]+', '', text))]))
+
+        # Find difference in what is used and what was given
         removed = list(filter(None, set([w.lower() for w in re.split('', text)]).difference(str.join(' ', sanitized))))
         removed = str.join(' ', removed)
         removed = removed.strip(' ')
@@ -165,21 +167,18 @@ class Model:
         for word in sanitized:
             new.append(self._stemmer.stem(word))
         sanitized = new
-        # TODO: This line gives better results for lower freq # but slightly worse for baseline
+
+        # Strip surrounding punctuation (but keeping inner character punctuation)
         sanitized = [w.strip(string.punctuation) for w in sanitized]
 
-        # Consider 'ask hn' and 'show hn' as one word to better predict type
+        # Consider weighted word(s) as single vocabulary element
         joined = str.join(' ', sanitized)
-        if 'ask hn' in joined:
-            cleaned = re.sub(r'ask hn', '', joined)
-            cleaned = re.split(' ', cleaned)
-            cleaned.append('ask hn')
-            return list(filter(None, cleaned))
-        elif 'show hn' in joined:
-            cleaned = re.sub(r'show hn', '', joined)
-            cleaned = re.split(' ', cleaned)
-            cleaned.append('show hn')
-            return list(filter(None, cleaned))
+        for weighted_word in self.word_weights.keys():
+            if weighted_word in joined:
+                cleaned = re.sub(weighted_word, '', joined)
+                cleaned = re.split(' ', cleaned)
+                cleaned.append(weighted_word)
+                return list(filter(None, cleaned))
 
         return sanitized
 
@@ -196,7 +195,7 @@ class Model:
         sanitized = self._sanitize_text(text)
         scores = dict()
         argmax = float('-Inf')
-        class_type_argmax = list(self.class_types)[0]
+        class_type_argmax = self.class_types[0]
         for class_type in self.class_types:
             score = self.score(class_type, sanitized)
             scores[class_type] = score
