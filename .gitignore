@@ -2,6 +2,7 @@
 **/.idea
 **/.DS_Store
 *.txt
+!requirements.txt
 res
 !res/hns_2018_2019.csv
 !res/test.csv
